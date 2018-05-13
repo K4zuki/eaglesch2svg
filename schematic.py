@@ -12,6 +12,7 @@ class BaseObject(object):
     name = ""
     MM = 3
     layer2color = {
+        "91": "lime",
         "94": "maroon",
         "95": "silver",
         "96": "silver",
@@ -23,7 +24,9 @@ class BaseObject(object):
     attr = attrdict.AttrDict({})
 
     def val2mm(self, value):
-        return (value * self.MM)
+        value = float(value)
+        ret = "{val:1.5f}".format(val=value * self.MM)
+        return ret
 
     def coord2mm(self, position):
         x, y = position
@@ -32,6 +35,47 @@ class BaseObject(object):
     def rot(self, rotate="R0"):
         mirror, spin, angle = re.findall(re.compile(r"([M]*)([S]*)R(\d+)"), rotate).pop()
         return (bool(mirror), bool(spin), int(angle))
+
+
+class Polygon(BaseObject):
+    """
+    <!ELEMENT polygon (vertex)*>
+              <!-- the vertices must define a valid polygon; if the last vertex is the same as the first one, it is ignored -->
+    <!ATTLIST polygon
+              width         %Dimension;    #REQUIRED
+              layer         %Layer;        #REQUIRED
+              spacing       %Dimension;    #IMPLIED
+              pour          %PolygonPour;  "solid"
+              isolate       %Dimension;    #IMPLIED
+              orphans       %Bool;         "no"
+              thermals      %Bool;         "yes"
+              rank          %Int;          "0"
+              >
+              <!-- isolate: Only in <signal> or <package> context -->
+              <!-- orphans: Only in <signal> context -->
+              <!-- thermals:Only in <signal> context -->
+              <!-- rank:    1..6 in <signal> context, 0 or 7 in <package> context -->
+    """
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
+
+
+class Vertex(BaseObject):
+    """
+    <!ELEMENT vertex EMPTY>
+    <!ATTLIST vertex
+              x             %Coord;        #REQUIRED
+              y             %Coord;        #REQUIRED
+              curve         %WireCurve;    "0"
+              >
+              <!-- curve: The curvature from this vertex to the next one -->
+    """
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
 
 
 class Wire(BaseObject):
@@ -75,6 +119,9 @@ class Wire(BaseObject):
         self.stroke_width = self.val2mm(width)
         self.stroke_dasharray = self.style2dasharray[style]
         self.rotate = int(curve)
+        wire = svgwrite.shapes.Line(start=self.start, end=self.end, stroke=self.stroke_fill,
+                                    stroke_width=self.stroke_width, stroke_linecap=self.stroke_linecap)
+        # print(wire.tostring())
 
 
 class Rect(BaseObject):
@@ -104,6 +151,8 @@ class Rect(BaseObject):
         self.size = self.coord2mm((x1-x2, y1-y2))
         self.stroke_fill = self.layer2color[layer]
         self.mirror, self.spin, self.angle = self.rot(rot)
+        rect = svgwrite.shapes.Rect(insert=self.insert, size=self.size)
+        # print(rect.tostring())
 
 
 class Text(BaseObject):
@@ -168,7 +217,9 @@ class Text(BaseObject):
 
 
 class Dimension(BaseObject):
-    pass
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
 
 
 class Circle(BaseObject):
@@ -189,15 +240,16 @@ class Circle(BaseObject):
         x = float(obj["@x"])
         y = float(obj["@y"])
         radius = float(obj["@radius"])
+        width = obj["@width"]
         layer = obj["@layer"]
-        font = obj.get("@font", "proportional")
-        rot = obj.get("@rot", "R0")
-        align = obj.get("@align", "bottom-left")
 
         self.center = self.coord2mm((x, y))
         self.r = radius
         self.stroke_fill = self.layer2color[layer]
-        self.mirror, self.spin, self.angle = self.rot(rot)
+        self.stroke_width = self.val2mm(width)
+        circle = svgwrite.shapes.Circle(center=self.center, stroke=self.stroke_fill,
+                                        stroke_width=self.stroke_width, r=self.r)
+        # print(circle.tostring())
 
 
 class Pin(BaseObject):
@@ -276,8 +328,10 @@ class Attribute(Text):
 
     def __init__(self, obj):
         super().__init__(obj)
+        print(self.__class__.__name__)
+        print(obj.keys())
         self.name = obj["@name"]
-        self.value = obj["@value"]
+        self.value = obj.get("@value")
         self.display = obj.get("@display", "value")
 
 
@@ -301,17 +355,19 @@ class Instance(BaseObject):
         print(self.__class__.__name__)
         print(obj.keys())
         x = float(obj["@x"])
-        x = float(obj["@x"])
+        y = float(obj["@y"])
         rot = obj.get("@rot", "R0")
         smashed = obj.get("@smashed", "no")
-        attributes = obj.get("attribute")
 
         self.gate = obj["@gate"]
         self.part = obj["@part"]
         self.center = self.coord2mm((x, y))
         self.smashed = self.get_bool[smashed]
         self.mirror, self.spin, self.angle = self.rot(rot)
-        self.attributes = [Attribute(attribute) for attribute in attributes]
+        if obj.get("attribute") is not None:
+            attributes = obj["attribute"]
+            if isinstance(attributes, list):
+                self.attributes = [Attribute(attribute) for attribute in attributes]
 
 
 class Part(BaseObject):
@@ -555,7 +611,7 @@ class Symbol(BaseObject):
                 self.polygons = [Polygon(polygon) for polygon in polygons]
             else:
                 self.polygons = [Polygon(polygons)]
-
+        #
         if obj.get("wire") is not None:
             wires = obj["wire"]
             if isinstance(wires, list):
@@ -563,7 +619,12 @@ class Symbol(BaseObject):
             else:
                 self.wires = [Wire(wires)]
         #
-        dimensions = list(obj["dimension"]) if obj.get("dimension") is not None else []
+        if obj.get("dimension") is not None:
+            dimensions = obj["dimension"]
+            if isinstance(dimensions, list):
+                self.dimensions = [Dimension(dimension) for dimension in dimensions]
+            else:
+                self.dimensions = [Dimension(dimensions)]
         #
         if obj.get("text") is not None:
             texts = obj["text"]
@@ -606,7 +667,7 @@ class Sheet(BaseObject):
     <!ELEMENT sheet (description?, plain?, moduleinsts?, instances?, busses?, nets?)>
     """
     description = None
-    plain = None
+    plain = []
     moduleinsts = []
     instances = []
     busses = []
@@ -615,10 +676,18 @@ class Sheet(BaseObject):
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
-        self.description = obj.get("description")
-        self.plain = obj.get("plain")
+        self.description = obj.get("description", "")
+
+        if obj.get("plain") is not None:
+            plain = obj["plain"]
+            self.plain = [Plain(plain)]
         self.instances = obj.get("instances")
-        print(type(self.instances))
+        if obj.get("instances") is not None:
+            instances = obj["instances"]["instance"]
+            if isinstance(instances, list):
+                self.instances = [Instance(instance) for instance in instances]
+            else:
+                self.instances = [Instance(instances)]
 
 
 class Plain(BaseObject):
@@ -637,6 +706,55 @@ class Plain(BaseObject):
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
+
+        if obj.get("polygon") is not None:
+            polygons = obj["polygon"]
+            if isinstance(polygons, list):
+                self.polygons = [Polygon(polygon) for polygon in polygons]
+            else:
+                self.polygons = [Polygon(polygons)]
+        #
+        if obj.get("wire") is not None:
+            wires = obj["wire"]
+            if isinstance(wires, list):
+                self.wires = [Wire(wire) for wire in wires]
+            else:
+                self.wires = [Wire(wires)]
+        #
+        if obj.get("text") is not None:
+            texts = obj["text"]
+            if isinstance(texts, list):
+                self.texts = [Text(text) for text in texts]
+            else:
+                self.texts = [Text(texts)]
+        #
+        if obj.get("dimension") is not None:
+            dimensions = obj["dimension"]
+            if isinstance(dimensions, list):
+                self.dimensions = [Dimension(dimension) for dimension in dimensions]
+            else:
+                self.dimensions = [Dimension(dimensions)]
+        #
+        if obj.get("circle") is not None:
+            circles = obj["circle"]
+            if isinstance(circles, list):
+                self.circles = [Circle(circle) for circle in circles]
+            else:
+                self.circles = [Circle(circles)]
+        #
+        if obj.get("rectangle") is not None:
+            rectangles = obj["rectangle"]
+            if isinstance(rectangles, list):
+                self.rectangles = [Rect(rectangle) for rectangle in rectangles]
+            else:
+                self.rectangles = [Rect(rectangles)]
+        #
+        if obj.get("frame") is not None:
+            frames = list(obj["frame"])
+            if isinstance(frames, list):
+                self.frames = [Frame(frame) for frame in frames]
+            else:
+                self.frames = [Frame(frames)]
 
 
 class Schematic(BaseObject):
