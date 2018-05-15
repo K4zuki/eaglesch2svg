@@ -11,7 +11,7 @@ import math
 
 class BaseObject(object):
     name = ""
-    MM = 3
+    MM = 3.0
     layer2color = {
         "91": "lime",
         "94": "maroon",
@@ -27,7 +27,7 @@ class BaseObject(object):
     def val2mm(self, value):
         value = float(value)
         ret = "{val:1.5f}".format(val=value * self.MM)
-        return ret
+        return float(ret)
 
     def coord2mm(self, position):
         x, y = position
@@ -61,6 +61,48 @@ class Polygon(BaseObject):
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
+        width = float(obj["@width"])
+        layer = obj["@layer"]
+        # "@spacing"
+        fill = obj.get("@pour", "solid")
+
+        self.stroke_fill = self.layer2color[layer]
+        self.stroke_width = self.val2mm(width)
+        if obj.get("vertex")is not None:
+            vertexes = obj["vertex"]
+            self.vertexes = [Vertex(vertex) for vertex in vertexes]
+            self.vertexes.append(self.vertexes[0])
+
+        for index, vertex in enumerate(self.vertexes[:-1]):
+            x1, y1 = vertex.coord
+            next_vertex = self.vertexes[index+1]
+            x2, y2 = next_vertex.coord
+            if index == 0:
+                self.polygon = svgwrite.path.Path(d="M{} {}".format(x1, y1), fill="none",
+                                                  stroke_width=self.stroke_width, stroke=self.stroke_fill)
+            if vertex.curve == 0:
+                self.polygon.push("L{} {}".format(x2, y2))
+            else:
+                large_arc = True if abs(vertex.curve) >= 180 else False
+                angle_dir = "+" if vertex.curve > 0 else "-"
+                rad = math.radians(vertex.curve/2)
+                dx, dy = (abs(x1-x2), abs(y1-y2))
+                # print(x1-x2, dx, y1-y2, dy)
+                d = math.sqrt(dx**2+dy**2)
+                s = math.sin(rad)
+                r = abs((d/2)/s)
+                print(d, s, r)
+
+                # r = float(self.val2mm(r))
+                self.polygon.push_arc(target=next_vertex.coord, rotation=0, r=r, large_arc=large_arc,
+                                      angle_dir=angle_dir, absolute=True)
+
+        self.polygon.push("Z")
+        print(self.polygon.tostring())
+        # "@isolate"
+        # "@orphans"
+        # "@thermals"
+        # "@rank"
 
 
 class Vertex(BaseObject):
@@ -77,6 +119,12 @@ class Vertex(BaseObject):
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
+        x = float(obj.get("@x"))
+        y = float(obj.get("@y"))
+        curve = obj.get("@curve", "0")
+
+        self.coord = self.coord2mm((x, y))
+        self.curve = int(curve)
 
 
 class Wire(BaseObject):
@@ -119,29 +167,29 @@ class Wire(BaseObject):
         self.stroke_fill = self.layer2color[layer]
         self.stroke_width = self.val2mm(width)
         self.stroke_dasharray = self.style2dasharray[style]
-        self.rotate = int(curve)
-        if self.rotate == 0:
+        self.curve = int(curve)
+        if self.curve == 0:
             self.wire = svgwrite.shapes.Line(start=self.start, end=self.end, stroke=self.stroke_fill,
                                              stroke_width=self.stroke_width, stroke_linecap=self.stroke_linecap)
-
         #
         else:
             x, y = self.start
-            self.wire = svgwrite.path.Path(d="M{x} {y}".format(x=x, y=y), fill="none",
+            self.wire = svgwrite.path.Path(d="M{} {}".format(x, y), fill="none",
                                            stroke_width=self.stroke_width, stroke=self.stroke_fill)
-            large_arc = True if abs(self.rotate) >= 180 else False
-            angle_dir = "+" if self.rotate > 0 else "-"
+            large_arc = True if abs(self.curve) >= 180 else False
+            angle_dir = "+" if self.curve > 0 else "-"
             # (3.7,1.0), (3.8,1.1), theta=100deg
             # sqrt((3.7-3.8)^2 + (1.0-1.1)^2) /2 = r * sin(theta / 2)
             # r = sqrt(...) / 2 / sin(theta/2)
-            rad = math.radians(self.rotate/2)
-            r = abs(math.sqrt(pow(x1-x2, 2)+pow(y1-y2, 2))/2/math.sin(rad))
-            r = float(self.val2mm(r))
+            rad = math.radians(self.curve/2)
+            dx, dy = self.coord2mm((x1-x2, y1-y2))
+            r = abs(math.sqrt(dx**2+dy**2)/2/math.sin(rad))
+            # r = float(self.val2mm(r))
             # r = float("{r:1.8f}".format(r=self.val2mm(r)))
 
             self.wire.push_arc(target=self.end, rotation=0, r=r, large_arc=large_arc,
                                angle_dir=angle_dir, absolute=True)
-            # print(self.wire.tostring())
+            print(self.wire.tostring())
         # return wire
 
 
@@ -690,7 +738,7 @@ class Symbol(BaseObject):
         shape = svgwrite.container.Group(id=self.name)
         shape.scale(1, -1)
 
-        # [shape.add(polygon.polygon) for polygon in self.polygons]
+        [shape.add(polygon.polygon) for polygon in self.polygons]
         [shape.add(wire.wire) for wire in self.wires]
         # [shape.add(dimension.dimension) for dimension in self.dimension]
         [shape.add(pin.pin) for pin in self.pins]
@@ -754,6 +802,7 @@ class Plain(BaseObject):
                 self.polygons = [Polygon(polygon) for polygon in polygons]
             else:
                 self.polygons = [Polygon(polygons)]
+            print(self.polygons)
         #
         if obj.get("wire") is not None:
             wires = obj["wire"]
@@ -800,10 +849,10 @@ class Plain(BaseObject):
         shape = svgwrite.container.Group(id="plain_objects")
         texts = svgwrite.container.Group(id="plain_texts")
 
-        # [shape.add(polygon.polygon) for polygon in self.polygons]
+        [shape.add(polygon.polygon) for polygon in self.polygons]
         [shape.add(wire.wire) for wire in self.wires]
-        [print(wire.wire.tostring()) for wire in self.wires]
-        print(shape.tostring())
+        # [print(wire.wire.tostring()) for wire in self.wires]
+        # print(shape.tostring())
         # [shape.add(dimension.dimension) for dimension in self.dimension]
         [texts.add(text.text) for text in self.texts]
         [shape.add(pin.pin) for pin in self.pins]
