@@ -240,13 +240,15 @@ class Text(BaseObject):
               >
     """
 
-    normalset = {"bottom": "alphabetic", "top": "text-before-edge",
-                 "left": "start", "right": "end"
+    normalset = {"bottom": "alphabetic", "top": "hanging",
+                 "left": "start", "right": "end",
+                 "center": "middle", "middle": "middle",
                  }
     mirrorset = {"bottom": "text-before-edge", "top": "alphabetic",
                  "left": "end", "right": "start",
-                 "text-before-edge": "alphabetic", "alphabetic": "text-before-edge",
-                 "end": "start", "start": "end"
+                 "hanging": "alphabetic", "alphabetic": "hanging",
+                 "end": "start", "start": "end",
+                 "center": "middle", "middle": "middle",
                  }
 
     def __init__(self, obj):
@@ -263,26 +265,32 @@ class Text(BaseObject):
 
         self.insert = self.coord2mm((x1, -y1))
         self.font_size = self.val2mm(size)
-        self.stroke_fill = self.layer2color[layer]
+        self.fill = self.layer2color[layer]
         self.mirror, self.spin, angle = self.rot(rot)
         self.dominant_baseline, self.text_anchor, self.angle = self.align(align, self.mirror, angle)
-        self.text = svgwrite.text.Text(text=text, insert=self.insert, font_size=self.font_size,
-                                       text_anchor=self.text_anchor, dominant_baseline=self.dominant_baseline)
+        self.text = svgwrite.text.Text(text=text, insert=self.insert, fill=self.fill, font_size=self.font_size,
+                                       font_family="sans-serif", text_anchor=self.text_anchor, dominant_baseline=self.dominant_baseline)
 
     def align(self, align, mirror, rotate):
         align = align.split("-")
         if len(align) == 2:
             vert, horiz = align
-            baseline = self.normalset[vert] if not mirror else self.mirrorset[vert]
+            baseline = self.normalset[vert]
             anchor = self.normalset[horiz] if not mirror else self.mirrorset[horiz]
         else:
             baseline = "middle"
             anchor = "middle"
 
+        if mirror:
+            if rotate in [90, 180]:
+                baseline = self.mirrorset[baseline]
+                anchor = self.mirrorset[anchor]
+        else:
+            if rotate in[180, 270]:
+                baseline = self.mirrorset[baseline]
+                anchor = self.mirrorset[anchor]
         if rotate % 180 == 90:
-            rotate = 90
-            baseline = self.mirrorset[baseline]
-            anchor = self.mirrorset[anchor]
+            rotate = -90
         else:
             rotate = 0
         return (baseline, anchor, rotate)
@@ -319,8 +327,9 @@ class Circle(BaseObject):
         self.r = self.val2mm(radius)
         self.stroke_fill = self.layer2color[layer]
         self.stroke_width = self.val2mm(width)
+        fill = self.stroke_fill if self.stroke_width == 0 else "none"
         self.circle = svgwrite.shapes.Circle(center=self.center, stroke=self.stroke_fill,
-                                             stroke_width=self.stroke_width, r=self.r, fill="none")
+                                             stroke_width=self.stroke_width, r=self.r, fill=fill)
         # print(circle.tostring())
 
 
@@ -854,7 +863,12 @@ class Plain(BaseObject):
         # [print(wire.wire.tostring()) for wire in self.wires]
         # print(shape.tostring())
         # [shape.add(dimension.dimension) for dimension in self.dimension]
-        [texts.add(text.text) for text in self.texts]
+        for text in self.texts:
+            angle = text.angle
+            insert = text.insert
+            text = text.text
+            text.rotate(angle, insert)
+            texts.add(text)
         [shape.add(pin.pin) for pin in self.pins]
         [shape.add(circle.circle) for circle in self.circles]
         [shape.add(rectangle.rect) for rectangle in self.rectangles]
