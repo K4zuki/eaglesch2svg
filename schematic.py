@@ -91,18 +91,13 @@ class Polygon(BaseObject):
                 d = math.sqrt(dx**2+dy**2)
                 s = math.sin(rad)
                 r = abs((d/2)/s)
-                print(d, s, r)
+                # print(d, s, r)
 
                 # r = float(self.val2mm(r))
                 self.polygon.push_arc(target=next_vertex.coord, rotation=0, r=r, large_arc=large_arc,
                                       angle_dir=angle_dir, absolute=True)
 
         self.polygon.push("Z")
-        print(self.polygon.tostring())
-        # "@isolate"
-        # "@orphans"
-        # "@thermals"
-        # "@rank"
 
 
 class Vertex(BaseObject):
@@ -189,7 +184,7 @@ class Wire(BaseObject):
 
             self.wire.push_arc(target=self.end, rotation=0, r=r, large_arc=large_arc,
                                angle_dir=angle_dir, absolute=True)
-            print(self.wire.tostring())
+            # print(self.wire.tostring())
         # return wire
 
 
@@ -410,12 +405,12 @@ class Attribute(Text):
     """
 
     def __init__(self, obj):
-        super().__init__(obj)
         print(self.__class__.__name__)
         print(obj.keys())
-        self.name = obj["@name"]
+        obj["#text"] = obj["@name"]
         self.value = obj.get("@value")
         self.display = obj.get("@display", "value")
+        super().__init__(obj)
 
 
 class Instance(BaseObject):
@@ -451,6 +446,8 @@ class Instance(BaseObject):
             attributes = obj["attribute"]
             if isinstance(attributes, list):
                 self.attributes = [Attribute(attribute) for attribute in attributes]
+        #
+        self.instance = svgwrite.container.Use("#dummy", insert=self.center)
 
 
 class Part(BaseObject):
@@ -510,9 +507,10 @@ class Library(BaseObject):
         if obj["devicesets"] is not None:
             devicesets = obj["devicesets"]["deviceset"]
             if isinstance(devicesets, list):
-                self.devicesets = [Deviceset(deviceset) for deviceset in devicesets]
+                devicesets = [Deviceset(deviceset) for deviceset in devicesets]
             else:
-                self.devicesets = [Deviceset(devicesets)]
+                devicesets = [Deviceset(devicesets)]
+            self.devicesets = {deviceset.name: deviceset for deviceset in devicesets}
 
 
 class Deviceset(BaseObject):
@@ -538,6 +536,19 @@ class Deviceset(BaseObject):
         uservalue = obj.get("@uservalue", "no")
 
         self.uservalue = self.get_bool[uservalue]
+        if obj.get("gates") is not None:
+            gates = obj["gates"]["gate"]
+            if isinstance(gates, list):
+                self.gates = [Gate(gate) for gate in gates]
+            else:
+                self.gates = [Gate(gates)]
+
+        if obj.get("devices") is not None:
+            devices = obj["devices"]["device"]
+            if isinstance(devices, list):
+                self.devices = [Device(device) for device in devices]
+            else:
+                self.devices = [Device(devices)]
 
 
 class Connect(BaseObject):
@@ -616,7 +627,7 @@ class Gate(BaseObject):
         self.name = obj["@name"]
         symbol = obj["@symbol"]
         x = float(obj["@x"])
-        x = float(obj["@x"])
+        y = float(obj["@y"])
 
         self.center = self.coord2mm((x, y))
 
@@ -744,17 +755,17 @@ class Symbol(BaseObject):
             else:
                 self.frames = [Frame(frames)]
         #
-        shape = svgwrite.container.Group(id=self.name)
-        shape.scale(1, -1)
+        symbol = svgwrite.container.Group(id=self.name)
+        symbol.scale(1, -1)
 
-        [shape.add(polygon.polygon) for polygon in self.polygons]
-        [shape.add(wire.wire) for wire in self.wires]
-        # [shape.add(dimension.dimension) for dimension in self.dimension]
-        [shape.add(pin.pin) for pin in self.pins]
-        [shape.add(circle.circle) for circle in self.circles]
-        [shape.add(rectangle.rect) for rectangle in self.rectangles]
-        self.shape = shape
-        print(self.shape.tostring())
+        [symbol.add(polygon.polygon) for polygon in self.polygons]
+        [symbol.add(wire.wire) for wire in self.wires]
+        # [symbol.add(dimension.dimension) for dimension in self.dimension]
+        [symbol.add(pin.pin) for pin in self.pins]
+        [symbol.add(circle.circle) for circle in self.circles]
+        [symbol.add(rectangle.rect) for rectangle in self.rectangles]
+        self.symbol = symbol
+        # print(self.symbol.tostring())
 
 
 class Sheet(BaseObject):
@@ -767,6 +778,7 @@ class Sheet(BaseObject):
     instances = []
     busses = []
     nets = []
+    sheet = svgwrite.container.Group()
 
     def __init__(self, obj):
         print(self.__class__.__name__)
@@ -774,8 +786,9 @@ class Sheet(BaseObject):
         self.description = obj.get("description", "")
 
         if obj.get("plain") is not None:
-            plain = obj["plain"]
-            self.plain = Plain(plain)
+            plain = Plain(obj["plain"])
+            self.sheet.add(plain.shapes)
+            self.sheet.add(plain.texts)
         #
         if obj.get("instances") is not None:
             instances = obj["instances"]["instance"]
@@ -783,9 +796,18 @@ class Sheet(BaseObject):
                 self.instances = [Instance(instance) for instance in instances]
             else:
                 self.instances = [Instance(instances)]
-        #
-        # for instance in self.instances:
-        #     print(instance.part, instance.gate)
+            #
+            for instance in self.instances:
+                if instance.smashed:
+                    for attr in instance.attributes:
+                        angle = attr.angle
+                        insert = attr.insert
+                        text = attr.text
+                        text.rotate(angle, insert)
+                        self.sheet.add(text)
+                        attr.text = None
+                print(instance.instance.href)
+                self.sheet.add(instance.instance)
 
 
 class Plain(BaseObject):
@@ -860,9 +882,8 @@ class Plain(BaseObject):
 
         [shape.add(polygon.polygon) for polygon in self.polygons]
         [shape.add(wire.wire) for wire in self.wires]
-        # [print(wire.wire.tostring()) for wire in self.wires]
-        # print(shape.tostring())
         # [shape.add(dimension.dimension) for dimension in self.dimension]
+
         for text in self.texts:
             angle = text.angle
             insert = text.insert
@@ -895,6 +916,8 @@ class Schematic(BaseObject):
     parts = []
     sheets = []
     errors = []
+    schematic = svgwrite.container.Group()
+    symbols = []
 
     def __init__(self, obj):
         print("Schematic")
@@ -904,9 +927,15 @@ class Schematic(BaseObject):
         if obj["libraries"] is not None:
             libraries = obj["libraries"]["library"]
             if isinstance(libraries, list):
-                self.libraries = [Library(library) for library in libraries]
+                self.libraries = [libraries["@name"]:Library(library) for library in libraries]
             else:
+                name = libraries["@name"]
                 self.libraries = [Library(libraries)]
+            for library in self.libraries:
+                symbols = [{symbol.symbol["id"]: symbol.symbol} for symbol in library.symbols]
+                print(symbols)
+                for symbol in library.symbols:
+                    self.symbols.append(symbol.symbol)
 
         if obj["attributes"] is not None:
             attributes = obj["attributes"]["attribute"]
@@ -920,7 +949,10 @@ class Schematic(BaseObject):
             if isinstance(parts, list):
                 self.parts = [Part(part) for part in parts]
             else:
-                self.part = [Part(parts)]
+                self.parts = [Part(parts)]
+            for part in self.parts:
+
+                pass
 
         if obj["sheets"] is not None:
             sheets = obj["sheets"]["sheet"]
@@ -928,3 +960,11 @@ class Schematic(BaseObject):
                 self.sheets = [Sheet(sheet) for sheet in sheets]
             else:
                 self.sheets = [Sheet(sheets)]
+            for index, sheet in enumerate(self.sheets):
+                for instance in sheet.instances:
+                    instance.instance.href = "#dummy{}".format(index)
+
+                sheet = sheet.sheet
+                sheet["id"] = "sheet{}".format(index)
+
+                self.schematic.add(sheet)
