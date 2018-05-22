@@ -30,8 +30,7 @@ def main():
     sch = Schematic(sch)
     dwg = svgwrite.Drawing(filename=output, debug=True)
     dwg.viewbox(-350, -350, 700, 700)
-    symbols = dwg.defs
-    [symbols.add(symbol) for symbol in sch.symbols]
+    [dwg.defs.add(symbol) for symbol in sch.symbols]
 
     dwg.add(sch.schematic)
     # print(schematic.tostring())
