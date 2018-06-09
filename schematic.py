@@ -808,7 +808,10 @@ class Sheet(BaseObject):
                 self.instances = [Instance(instance) for instance in instances]
             else:
                 self.instances = [Instance(instances)]
-            #
+
+            shapes = svgwrite.container.Group()
+            shapes.scale(1, -1)
+            self.sheet.add(shapes)
             for instance in self.instances:
                 if instance.smashed:
                     for attr in instance.attributes:
