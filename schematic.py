@@ -685,6 +685,36 @@ class Frame(BaseObject):
         self.border.bottom = self.get_bool[border_bottom]
 
 
+class Net(BaseObject):
+    """
+    <!ELEMENT net (segment)*>
+    <!ATTLIST net
+              name          %String;       #REQUIRED
+              class         %Class;        "0"
+              >
+    """
+    segments = []
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
+        self.name = obj["@name"]
+
+
+class Segment(BaseObject):
+    """
+    <!ELEMENT segment (pinref | portref | wire | junction | label)*>
+    """
+    wire = []
+    junction = []
+    label = []
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
+        self.name = obj["@name"]
+
+
 class Symbol(BaseObject):
     """
     <!ELEMENT symbol (description?, (polygon | wire | text | dimension | pin | circle | rectangle | frame)*)>
@@ -822,7 +852,14 @@ class Sheet(BaseObject):
                         self.sheet.add(text)
                         attr.text = None
                 print(instance.instance.href)
-                self.sheet.add(instance.instance)
+                shapes.add(instance.instance)
+
+        if obj.get("nets") is not None:
+            nets = obj["nets"]["net"]
+            if isinstance(nets, list):
+                self.nets = [Net(net) for net in nets]
+            else:
+                self.nets = [Net(nets)]
 
 
 class Plain(BaseObject):
