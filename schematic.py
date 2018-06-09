@@ -4,6 +4,7 @@ based on Eagle 7.5.0 DTD
 
 import attrdict
 import svgwrite
+
 import re
 import pprint
 import math
@@ -11,18 +12,20 @@ import math
 
 class BaseObject(object):
     name = ""
-    MM = 3.0
+    MM = 10.0
     layer2color = {
-        "91": "lime",
-        "94": "maroon",
-        "95": "silver",
-        "96": "silver",
+        "91": "#4BA54B",  # Nets
+        "93": "#9B4646",  # Pins
+        "94": "#9B4646",  # Symbols
+        "95": "#A5A5A5",  # Names
+        "96": "#A5A5A5",  # Values
     }
     mirror = False
     spin = False
     angle = 0
     get_bool = {"no": False, "yes": True}
     attr = attrdict.AttrDict({})
+    dwg = svgwrite.drawing.Drawing()
 
     def val2mm(self, value):
         value = float(value)
@@ -78,8 +81,8 @@ class Polygon(BaseObject):
             next_vertex = self.vertexes[index + 1]
             x2, y2 = next_vertex.coord
             if index == 0:
-                self.polygon = svgwrite.path.Path(d="M{} {}".format(x1, y1), fill="none",
-                                                  stroke_width=self.stroke_width, stroke=self.stroke_fill)
+                self.polygon = self.dwg.path(d="M{} {}".format(x1, y1), fill="none", fill_opacity=0.5,
+                                             stroke_width=self.stroke_width, stroke=self.stroke_fill)
             if vertex.curve == 0:
                 self.polygon.push("L{} {}".format(x2, y2))
             else:
@@ -164,13 +167,13 @@ class Wire(BaseObject):
         self.stroke_dasharray = self.style2dasharray[style]
         self.curve = int(curve)
         if self.curve == 0:
-            self.wire = svgwrite.shapes.Line(start=self.start, end=self.end, stroke=self.stroke_fill,
-                                             stroke_width=self.stroke_width, stroke_linecap=self.stroke_linecap)
+            self.wire = self.dwg.line(start=self.start, end=self.end, stroke=self.stroke_fill,
+                                      stroke_width=self.stroke_width, stroke_linecap=self.stroke_linecap)
         #
         else:
             x, y = self.start
-            self.wire = svgwrite.path.Path(d="M{} {}".format(x, y), fill="none",
-                                           stroke_width=self.stroke_width, stroke=self.stroke_fill)
+            self.wire = self.dwg.path(d="M{} {}".format(x, y), fill="none",
+                                      stroke_width=self.stroke_width, stroke=self.stroke_fill)
             large_arc = True if abs(self.curve) >= 180 else False
             angle_dir = "+" if self.curve > 0 else "-"
             # (3.7,1.0), (3.8,1.1), theta=100deg
@@ -215,8 +218,8 @@ class Rect(BaseObject):
         self.size = self.coord2mm((abs(x1 - x2), abs(y1 - y2)))
         self.stroke_fill = self.layer2color[layer]
         self.mirror, self.spin, self.angle = self.rot(rot)
-        self.rect = svgwrite.shapes.Rect(insert=self.insert, size=self.size, stroke=self.stroke_fill,
-                                         fill=self.stroke_fill, stroke_linecap="round")
+        self.rect = self.dwg.rect(insert=self.insert, size=self.size, stroke=self.stroke_fill, fill_opacity=0.95,
+                                  fill=self.stroke_fill, stroke_linecap="round")
         # print(rect.tostring())
 
 
@@ -260,13 +263,13 @@ class Text(BaseObject):
         text = obj.get("#text")
 
         self.insert = self.coord2mm((x1, -y1))
-        self.font_size = self.val2mm(size)
+        self.font_size = int(self.val2mm(size * 1.4))
         self.fill = self.layer2color[layer]
         self.mirror, self.spin, angle = self.rot(rot)
         self.dominant_baseline, self.text_anchor, self.angle = self.align(align, self.mirror, angle)
-        self.text = svgwrite.text.Text(text=text, insert=self.insert, fill=self.fill, font_size=self.font_size,
-                                       font_family="sans-serif", text_anchor=self.text_anchor,
-                                       dominant_baseline=self.dominant_baseline)
+        self.text = self.dwg.text(text=text, insert=self.insert, fill=self.fill, font_size=self.font_size,
+                                  font_family="Arial", text_anchor=self.text_anchor,
+                                  dominant_baseline=self.dominant_baseline)
         if text == r">NAME":
             self.text["id"] = "name"
         elif text == r">VALUE":
@@ -329,8 +332,8 @@ class Circle(BaseObject):
         self.stroke_fill = self.layer2color[layer]
         self.stroke_width = self.val2mm(width)
         fill = self.stroke_fill if self.stroke_width == 0 else "none"
-        self.circle = svgwrite.shapes.Circle(center=self.center, stroke=self.stroke_fill,
-                                             stroke_width=self.stroke_width, r=self.r, fill=fill)
+        self.circle = self.dwg.circle(center=self.center, stroke=self.stroke_fill,
+                                      stroke_width=self.stroke_width, r=self.r, fill=fill)
         # print(circle.tostring())
 
 
@@ -351,43 +354,60 @@ class Pin(BaseObject):
     """
     appear_pinname = {"off": False, "pin": True, "pad": False, "both": True}
     appear_padname = {"off": False, "pin": False, "pad": True, "both": True}
+    get_func = {"none": (False, False), "dot": (True, False), "clk": (False, True), "dotclk": (True, True)}
+    get_length = {"point": 0, "short": 2.54, "middle": 5.08, "long": 7.62}
 
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
 
-        self.get_length = {"point": 0,
-                           "short": self.val2mm(2.54),
-                           "middle": self.val2mm(5.08),
-                           "long": self.val2mm(7.62)}
         self.name = obj["@name"]
         x = float(obj["@x"])
         y = float(obj["@y"])
-        visible = obj.get("@visible")
+        visible = obj.get("@visible", "off")
         rot = obj.get("@rot", "R0")
         length = obj.get("@length", "long")
+        func = obj.get("@function", "none")
 
         self.name = obj["@name"]
         self.start = self.coord2mm((x, y))
+        offset = self.get_length[length]
+        self.end = self.coord2mm((x + offset, y))
+
         self.pin_name = self.appear_pinname[visible]
         self.pin_number = self.appear_padname[visible]
+        self.stroke = self.layer2color["93"]
+        self.stroke_width = self.val2mm(0.1524)
         self.mirror, self.spin, self.angle = self.rot(rot)
-        self.end = self.get_end(self.start, length, self.angle)
-        self.pin = svgwrite.shapes.Line(id=self.name, start=self.start, end=self.end, stroke="maroon",
-                                        stroke_width=self.val2mm(0.1524), stroke_linecap="round")
 
-    def get_end(self, start, length, rot):
+        self.shape = self.dwg.g(id="{}-pin".format(self.name))
+        self.dot, self.clk = self.get_func[func]
+        self.get_pin(length)
+
+        self.pin = self.dwg.g(id=self.name)
+        self.pin.add(self.shape)
+        self.pin.rotate(self.angle, self.start)
+
+    def get_pin(self, length):
         offset = self.get_length[length]
-        x, y = start
-        if self.angle == 0:
-            x = x + offset * (-1 if self.mirror else 1)
-        elif self.angle == 90:
-            y = y + offset * (-1 if self.mirror else 1)
-        elif self.angle == 180:
-            x = x - offset * (-1 if self.mirror else 1)
-        elif self.angle == 270:
-            y = y - offset * (-1 if self.mirror else 1)
-        return (x, y)
+        x, y = self.start
+        if self.dot and offset > 0:
+            offset = offset - (2.032)
+            self.shape.add(
+                self.dwg.circle(center=(x + self.val2mm(offset + 2.032 / 2.0), y), r=self.val2mm(1.0),
+                                stroke_width=self.stroke_width,
+                                stroke=self.stroke, fill="none"))
+        if self.clk:
+            ex, ey = self.end
+            end = (ex + self.val2mm(2.032), ey)
+            self.shape.add(self.dwg.line(start=(ex, ey + self.val2mm(1.016)), end=end, stroke_width=self.stroke_width,
+                                         stroke=self.stroke))
+            self.shape.add(self.dwg.line(start=(ex, ey + self.val2mm(-1.016)), end=end, stroke_width=self.stroke_width,
+                                         stroke=self.stroke))
+
+        x += self.val2mm(offset)
+        self.shape.add(self.dwg.line(id=self.name, start=self.start, end=(x, y), stroke=self.stroke,
+                                     stroke_width=self.val2mm(0.1524), stroke_linecap="round"))
 
 
 class Attribute(Text):
@@ -454,7 +474,7 @@ class Instance(BaseObject):
             if isinstance(attributes, list):
                 self.attributes = [Attribute(attribute) for attribute in attributes]
         #
-        self.instance = svgwrite.container.Use("#dummy", insert=self.center)
+        self.instance = self.dwg.use("#dummy", insert=self.center, id=self.part)
 
 
 class Part(BaseObject):
@@ -571,7 +591,7 @@ class Connect(BaseObject):
               >
     """
 
-    def __init__(self, gate, pin, pad, route="all"):
+    def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
         self.gate = obj["@gate"]
@@ -699,20 +719,68 @@ class Net(BaseObject):
         print(self.__class__.__name__)
         print(obj.keys())
         self.name = obj["@name"]
+        self.net = self.dwg.g(id=self.name)
+
+        if obj.get("segment") is not None:
+            segments = obj["segment"]
+            if isinstance(segments, list):
+                self.segments = [Segment(segment) for segment in segments]
+            else:
+                self.segments = [Segment(segments)]
+            [self.net.add(segment.segment) for segment in self.segments]
 
 
 class Segment(BaseObject):
     """
     <!ELEMENT segment (pinref | portref | wire | junction | label)*>
     """
-    wire = []
-    junction = []
+    wires = []
+    junctions = []
     label = []
 
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
-        self.name = obj["@name"]
+        self.segment = self.dwg.g()
+
+        if obj.get("wire") is not None:
+            wires = obj["wire"]
+            if isinstance(wires, list):
+                self.wires = [Wire(wire) for wire in wires]
+            else:
+                self.wires = [Wire(wires)]
+            [self.segment.add(wire.wire) for wire in self.wires]
+
+        if obj.get("junction") is not None:
+            junctions = obj["junction"]
+            if isinstance(junctions, list):
+                self.junctions = [Junction(junction) for junction in junctions]
+            else:
+                self.junctions = [Junction(junctions)]
+            [self.segment.add(junction.junction) for junction in self.junctions]
+
+
+class Junction(BaseObject):
+    """
+    <!ELEMENT junction EMPTY>
+    <!ATTLIST junction
+              x             %Coord;        #REQUIRED
+              y             %Coord;        #REQUIRED
+              >
+    """
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
+        x = float(obj["@x"])
+        y = float(obj["@y"])
+        self.center = self.coord2mm((x, y))
+        self.r = self.val2mm(0.5)
+        self.stroke_fill = self.layer2color["91"]
+        self.stroke_width = self.val2mm(0)
+        fill = self.stroke_fill if self.stroke_width == 0 else "none"
+        self.junction = self.dwg.circle(center=self.center, stroke=self.stroke_fill,
+                                        stroke_width=self.stroke_width, r=self.r, fill=fill)
 
 
 class Symbol(BaseObject):
@@ -794,7 +862,7 @@ class Symbol(BaseObject):
             else:
                 self.frames = [Frame(frames)]
         #
-        self.shape = svgwrite.container.Group(id="{}-shape".format(self.name))
+        self.shape = self.dwg.g(id="{}-shape".format(self.name))
         # symbol.scale(1, -1)
 
         [self.shape.add(polygon.polygon) for polygon in self.polygons]
@@ -804,8 +872,8 @@ class Symbol(BaseObject):
         [self.shape.add(circle.circle) for circle in self.circles]
         [self.shape.add(rectangle.rect) for rectangle in self.rectangles]
 
-        self.symbol = svgwrite.container.Group(id=self.name)
-        self.symbol.add(svgwrite.container.Use("#{}".format(self.shape.get_id())))
+        self.symbol = self.dwg.g(id=self.name)
+        self.symbol.add(self.dwg.use("#{}".format(self.shape.get_id())))
 
         # print(self.symbol.tostring())
 
@@ -820,18 +888,21 @@ class Sheet(BaseObject):
     instances = []
     busses = []
     nets = []
-    sheet = svgwrite.container.Group()
 
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
         self.description = obj.get("description", "")
+        self.sheet = self.dwg.g()
 
         if obj.get("plain") is not None:
             plain = Plain(obj["plain"])
             self.sheet.add(plain.shapes)
             self.sheet.add(plain.texts)
         #
+        shapes = self.dwg.g(transform="scale(1,-1)")
+        self.sheet.add(shapes)
+
         if obj.get("instances") is not None:
             instances = obj["instances"]["instance"]
             if isinstance(instances, list):
@@ -839,9 +910,6 @@ class Sheet(BaseObject):
             else:
                 self.instances = [Instance(instances)]
 
-            shapes = svgwrite.container.Group()
-            shapes.scale(1, -1)
-            self.sheet.add(shapes)
             for instance in self.instances:
                 if instance.smashed:
                     for attr in instance.attributes:
@@ -851,7 +919,7 @@ class Sheet(BaseObject):
                         text.rotate(angle, insert)
                         self.sheet.add(text)
                         attr.text = None
-                print(instance.instance.href)
+                # print(instance.instance.href)
                 shapes.add(instance.instance)
 
         if obj.get("nets") is not None:
@@ -860,6 +928,7 @@ class Sheet(BaseObject):
                 self.nets = [Net(net) for net in nets]
             else:
                 self.nets = [Net(nets)]
+            [shapes.add(net.net) for net in self.nets]
 
 
 class Plain(BaseObject):
@@ -929,8 +998,8 @@ class Plain(BaseObject):
             else:
                 self.frames = [Frame(frames)]
         #
-        shape = svgwrite.container.Group(id="plain_objects")
-        texts = svgwrite.container.Group(id="plain_texts")
+        shape = self.dwg.g(id="plain_objects")
+        texts = self.dwg.g(id="plain_texts")
 
         [shape.add(polygon.polygon) for polygon in self.polygons]
         [shape.add(wire.wire) for wire in self.wires]
@@ -968,12 +1037,12 @@ class Schematic(BaseObject):
     parts = []
     sheets = []
     errors = []
-    schematic = svgwrite.container.Group()
     symbols = []
 
     def __init__(self, obj):
-        print("Schematic")
+        print(self.__class__.__name__)
         print(obj.keys())
+        self.schematic = self.dwg.g()
         self.description = attrdict.AttrDict(obj.get("description", {}))
 
         if obj["libraries"] is not None:
@@ -982,11 +1051,6 @@ class Schematic(BaseObject):
                 libraries = [Library(library) for library in libraries]
             else:
                 libraries = [Library(libraries)]
-            for library in self.libraries:
-                symbols = [{symbol.name: symbol.symbol} for symbol in library.symbols]
-                print(symbols)
-                for symbol in library.symbols:
-                    self.symbols.append(symbol.symbol)
             self.library = {library.name: library for library in libraries}
 
         # instance.part.library[instance.part.library].devicesets[instance.part.deviceset].gates[instance.gate].symbol
@@ -1023,11 +1087,12 @@ class Schematic(BaseObject):
                     instance.symbol["id"] = symbol_id
                     instance.shape = lib.symbols[gate.symbol].shape
 
+                    rot = -1 if instance.mirror else 1
                     if instance.mirror:
                         instance.symbol["id"] = "{}F".format(instance.symbol.get_id())
                         instance.symbol.scale(-1, 1)
                     if instance.angle:
-                        instance.instance.rotate(instance.angle, instance.center)
+                        instance.instance.rotate(rot * instance.angle, instance.center)
 
                     self.symbols.append(instance.symbol)
                     self.symbols.append(instance.shape)
