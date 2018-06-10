@@ -728,6 +728,12 @@ class Net(BaseObject):
             else:
                 self.segments = [Segment(segments)]
             [self.net.add(segment.segment) for segment in self.segments]
+            for segment in self.segments:
+                for label in segment.labels:
+                    label.label.text.text = self.name
+                    angle = label.label.angle
+                    insert = label.label.insert
+                    label.label.text.rotate(angle, insert)
 
 
 class Segment(BaseObject):
@@ -736,7 +742,7 @@ class Segment(BaseObject):
     """
     wires = []
     junctions = []
-    label = []
+    labels = []
 
     def __init__(self, obj):
         print(self.__class__.__name__)
@@ -758,6 +764,37 @@ class Segment(BaseObject):
             else:
                 self.junctions = [Junction(junctions)]
             [self.segment.add(junction.junction) for junction in self.junctions]
+
+        if obj.get("label") is not None:
+            labels = obj["label"]
+            if isinstance(labels, list):
+                self.labels = [Label(label) for label in labels]
+            else:
+                self.labels = [Label(labels)]
+
+
+class Label(BaseObject):
+    """
+    <!ELEMENT label EMPTY>
+    <!ATTLIST label
+              x             %Coord;        #REQUIRED
+              y             %Coord;        #REQUIRED
+              size          %Dimension;    #REQUIRED
+              layer         %Layer;        #REQUIRED
+              font          %TextFont;     "proportional"
+              ratio         %Int;          "8"
+              rot           %Rotation;     "R0"
+              xref          %Bool;         "no"
+              >
+              <!-- rot:  Only 0, 90, 180 or 270 -->
+              <!-- xref: Only in <net> context -->
+    """
+
+    def __init__(self, obj):
+        print(self.__class__.__name__)
+        print(obj.keys())
+        obj["#text"] = ""
+        self.label = Text(obj)
 
 
 class Junction(BaseObject):
@@ -929,6 +966,8 @@ class Sheet(BaseObject):
             else:
                 self.nets = [Net(nets)]
             [shapes.add(net.net) for net in self.nets]
+            [[[self.sheet.add(label.label.text) for label in segment.labels] for segment in net.segments] for net in
+             self.nets]
 
 
 class Plain(BaseObject):
