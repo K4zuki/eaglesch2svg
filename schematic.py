@@ -145,6 +145,7 @@ class Wire(BaseObject):
     """
     style2dasharray = {
         "continuous": "continuous",
+        "shortdash": "shortdash",
     }
     stroke_linecap = "round"
 
@@ -249,6 +250,9 @@ class Text(BaseObject):
                  "end": "start", "start": "end",
                  "center": "middle", "middle": "middle",
                  }
+    get_font = {"vector": "Courier New",
+                "proportional": "Arial",
+                "fixed": "monospace"}
 
     def __init__(self, obj):
         print(self.__class__.__name__)
@@ -260,20 +264,17 @@ class Text(BaseObject):
         font = obj.get("@font", "proportional")
         rot = obj.get("@rot", "R0")
         align = obj.get("@align", "bottom-left")
-        text = obj.get("#text")
+        text = obj.get("#text", "")
 
+        fontfamily = self.get_font[font]
         self.insert = self.coord2mm((x1, -y1))
         self.font_size = int(self.val2mm(size * 1.4))
         self.fill = self.layer2color[layer]
         self.mirror, self.spin, angle = self.rot(rot)
         self.dominant_baseline, self.text_anchor, self.angle = self.align(align, self.mirror, angle)
         self.text = self.dwg.text(text=text, insert=self.insert, fill=self.fill, font_size=self.font_size,
-                                  font_family="Arial", text_anchor=self.text_anchor,
+                                  font_family=fontfamily, text_anchor=self.text_anchor,
                                   dominant_baseline=self.dominant_baseline)
-        if text == r">NAME":
-            self.text["id"] = "name"
-        elif text == r">VALUE":
-            self.text["id"] = "value"
 
     def align(self, align, mirror, rotate):
         align = align.split("-")
@@ -429,11 +430,17 @@ class Attribute(Text):
               <!-- display: Only in <element> or <instance> context -->
               <!-- constant:Only in <device> context -->
     """
+    get_disp = {"off": "",
+                "value": "{}",
+                "name": "{}",
+                "both": "{} = {}"
+                }
 
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
-        obj["#text"] = obj["@name"]
+        self.name = obj["@name"]
+        obj["#text"] = self.name
         self.value = obj.get("@value")
         self.display = obj.get("@display", "value")
         super().__init__(obj)
@@ -454,6 +461,7 @@ class Instance(BaseObject):
     """
     symbol = None
     attributes = []
+    texts = None
 
     def __init__(self, obj):
         print(self.__class__.__name__)
@@ -465,6 +473,7 @@ class Instance(BaseObject):
 
         self.gate = obj["@gate"]
         self.part = obj["@part"]
+        self.name = self.dwg.text(self.part, insert=self.coord2mm((x, -y)))
         self.center = self.coord2mm((x, y))
         self.smashed = self.get_bool[smashed]
         self.mirror, self.spin, self.angle = self.rot(rot)
@@ -473,8 +482,65 @@ class Instance(BaseObject):
             attributes = obj["attribute"]
             if isinstance(attributes, list):
                 self.attributes = [Attribute(attribute) for attribute in attributes]
-        #
-        self.instance = self.dwg.use("#dummy", insert=self.center, id=self.part)
+            else:
+                self.attributes = [Attribute(attributes)]
+
+    def populate(self, libraries, parts):
+        self.part = parts[self.part]
+        library = libraries[self.part.library]
+        self.deviceset = library.devicesets[self.part.deviceset]
+        self.gate = self.deviceset.gates[self.gate]
+
+        symbol = library.symbols[self.gate.symbol]
+        self.pop_texts(symbol)
+
+        self.symbol = symbol.symbol.copy()
+        self.symbol["id"] = symbol.symbol.get_id()
+        self.instance = self.dwg.use("#{}".format(symbol.name), insert=self.center, id=self.part.name)
+        self.shape = symbol.shape
+
+        rot = -1 if self.mirror else 1
+        if self.mirror:
+            mirrored_id = "{}F".format(self.symbol.get_id())
+            self.symbol["id"] = mirrored_id
+            self.symbol.scale(-1, 1)
+            self.instance.href = "#{}".format(mirrored_id)
+        if self.angle:
+            self.instance.rotate(rot * self.angle, self.center)
+
+    def pop_texts(self, symbol):
+        self.texts = self.dwg.g(id="{}-text".format(self.name.text))
+        if not self.deviceset.uservalue:
+            self.part.generate_value()
+        for attr in self.attributes:
+            attr.text.rotate(attr.angle, attr.insert)
+            if self.smashed:
+                if attr.name == "NAME":
+                    attr.text.text = self.part.name
+                elif attr.name == "VALUE":
+                    attr.text.text = self.part.value
+                else:
+                    attr.get_disp[attr.display].format(attr.name, attr.value)
+                self.texts.add(attr.text)
+        if not self.smashed:
+            for text in symbol.texts:
+                tx, ty = text.insert
+                cx, cy = self.center
+                newx = tx + cx
+                newy = -cy + ty
+                _text = text.text.copy()
+                _text["x"] = newx
+                _text["y"] = newy
+                if _text.text == ">NAME":
+                    _text.text = self.part.name
+                elif _text.text == ">VALUE":
+                    _text.text = self.part.value
+                rot = 1 if self.mirror else -1
+                _text.rotate(rot * self.angle, (cx, -cy))
+                rot = -1 if text.mirror else 1
+                _text.rotate(rot * text.angle, (newx, newy))
+
+                self.texts.add(_text)
 
 
 class Part(BaseObject):
@@ -491,6 +557,7 @@ class Part(BaseObject):
     """
     attributes = []
     variants = []
+    deviceset = None
 
     def __init__(self, obj):
         print(self.__class__.__name__)
@@ -500,8 +567,29 @@ class Part(BaseObject):
         self.deviceset = obj["@deviceset"]
         self.device = obj["@device"]
         self.technology = obj.get("@technology", "")
-        self.attribute = obj.get("@attribute", "")
-        self.value = obj.get("@value")
+        # self.attribute = obj.get("@attribute", "")
+        self.value = obj.get("@value", "")
+
+        if obj.get("@attribute") is not None:
+            attributes = obj["@attribute"]
+            if isinstance(attributes, list):
+                self.attributes = [Attribute(attr) for attr in attributes]
+            else:
+                self.attributes = [Attribute(attributes)]
+
+    def generate_value(self):
+        if self.deviceset.count("*") > 0:
+            sp = self.deviceset.split("*")
+            value = "".join([sp[0],
+                             self.technology,
+                             sp[1],
+                             self.device
+                             ])
+        else:
+            value = "".join([self.deviceset,
+                             self.device
+                             ])
+        if not self.value: self.value = value
 
 
 class Library(BaseObject):
@@ -567,10 +655,10 @@ class Deviceset(BaseObject):
         if obj.get("gates") is not None:
             gates = obj["gates"]["gate"]
             if isinstance(gates, list):
-                self.gates = [Gate(gate) for gate in gates]
+                self.gates = {gate["@name"]: Gate(gate) for gate in gates}
+                #
             else:
-                self.gates = [Gate(gates)]
-            self.gates = {gate.name: gate for gate in self.gates}
+                self.gates = {gates["@name"]: Gate(gates)}
 
         if obj.get("devices") is not None:
             devices = obj["devices"]["device"]
@@ -578,6 +666,10 @@ class Deviceset(BaseObject):
                 self.devices = [Device(device) for device in devices]
             else:
                 self.devices = [Device(devices)]
+            for device in self.devices:
+                if device.connects:
+                    for connect in device.connects:
+                        connect.gate = self.gates[connect.gate]
 
 
 class Connect(BaseObject):
@@ -598,6 +690,7 @@ class Connect(BaseObject):
         self.pin = obj["@pin"]
         self.pad = obj["@pad"]
         self.route = obj.get("@route", "all")
+        self.connect = (self.pin, self.pad)
 
 
 class Device(BaseObject):
@@ -608,7 +701,7 @@ class Device(BaseObject):
               package       %String;       #IMPLIED
               >
     """
-    connects = None
+    connects = []
     technologies = None
 
     def __init__(self, obj):
@@ -618,6 +711,13 @@ class Device(BaseObject):
         self.package = obj.get("@package")
         self.connects = obj.get("connects")
         self.technologies = obj.get("technologies")
+
+        if obj.get("connects") is not None:
+            connects = obj["connects"]["connect"]
+            if isinstance(connects, list):
+                self.connects = [Connect(connect) for connect in connects]
+            else:
+                self.connects = [Connect(connects)]
 
 
 class Technology(BaseObject):
@@ -893,7 +993,7 @@ class Symbol(BaseObject):
                 self.rectangles = [Rect(rectangles)]
         #
         if obj.get("frame") is not None:
-            frames = list(obj["frame"])
+            frames = obj["frame"]
             if isinstance(frames, list):
                 self.frames = [Frame(frame) for frame in frames]
             else:
@@ -901,6 +1001,13 @@ class Symbol(BaseObject):
         #
         self.shape = self.dwg.g(id="{}-shape".format(self.name))
         # symbol.scale(1, -1)
+
+        origin = self.dwg.g(id="origin")
+        origin.add(self.dwg.line(start=self.coord2mm((-1, 0)), end=self.coord2mm((1, 0)), stroke="maroon",
+                                 stroke_linecap="round"))
+        origin.add(self.dwg.line(start=self.coord2mm((0, -1)), end=self.coord2mm((0, 1)), stroke="maroon",
+                                 stroke_linecap="round"))
+        self.shape.add(origin)
 
         [self.shape.add(polygon.polygon) for polygon in self.polygons]
         [self.shape.add(wire.wire) for wire in self.wires]
@@ -911,8 +1018,6 @@ class Symbol(BaseObject):
 
         self.symbol = self.dwg.g(id=self.name)
         self.symbol.add(self.dwg.use("#{}".format(self.shape.get_id())))
-
-        # print(self.symbol.tostring())
 
 
 class Sheet(BaseObject):
@@ -925,20 +1030,21 @@ class Sheet(BaseObject):
     instances = []
     busses = []
     nets = []
+    shapes = None
 
     def __init__(self, obj):
         print(self.__class__.__name__)
         print(obj.keys())
         self.description = obj.get("description", "")
         self.sheet = self.dwg.g()
+        self.shapes = self.dwg.g(transform="scale(1,-1)")
+        self.sheet.add(self.shapes)
 
         if obj.get("plain") is not None:
             plain = Plain(obj["plain"])
             self.sheet.add(plain.shapes)
             self.sheet.add(plain.texts)
         #
-        shapes = self.dwg.g(transform="scale(1,-1)")
-        self.sheet.add(shapes)
 
         if obj.get("instances") is not None:
             instances = obj["instances"]["instance"]
@@ -949,15 +1055,7 @@ class Sheet(BaseObject):
 
             for instance in self.instances:
                 if instance.smashed:
-                    for attr in instance.attributes:
-                        angle = attr.angle
-                        insert = attr.insert
-                        text = attr.text
-                        text.rotate(angle, insert)
-                        self.sheet.add(text)
-                        attr.text = None
-                # print(instance.instance.href)
-                shapes.add(instance.instance)
+                    [self.sheet.add(attr.text) for attr in instance.attributes]
 
         if obj.get("nets") is not None:
             nets = obj["nets"]["net"]
@@ -965,9 +1063,16 @@ class Sheet(BaseObject):
                 self.nets = [Net(net) for net in nets]
             else:
                 self.nets = [Net(nets)]
-            [shapes.add(net.net) for net in self.nets]
+            [self.shapes.add(net.net) for net in self.nets]
             [[[self.sheet.add(label.label.text) for label in segment.labels] for segment in net.segments] for net in
              self.nets]
+
+    def populate(self, libraries, parts):
+        for instance in self.instances:
+            instance.populate(libraries, parts)
+            self.shapes.add(instance.instance)
+            self.sheet.add(instance.texts)
+            self.shapes.add(instance.instance)
 
 
 class Plain(BaseObject):
@@ -1090,9 +1195,8 @@ class Schematic(BaseObject):
                 libraries = [Library(library) for library in libraries]
             else:
                 libraries = [Library(libraries)]
-            self.library = {library.name: library for library in libraries}
+            self.libraries = {library.name: library for library in libraries}
 
-        # instance.part.library[instance.part.library].devicesets[instance.part.deviceset].gates[instance.gate].symbol
         if obj["attributes"] is not None:
             attributes = obj["attributes"]["attribute"]
             if isinstance(attributes, list):
@@ -1115,29 +1219,13 @@ class Schematic(BaseObject):
             else:
                 self.sheets = [Sheet(sheets)]
             for index, sheet in enumerate(self.sheets):
+                sheet.populate(self.libraries, self.parts)
+
                 for instance in sheet.instances:
-                    instance.part = self.parts[instance.part]
-                    lib = self.library[instance.part.library]
-                    devset = lib.devicesets[instance.part.deviceset]
-                    gate = devset.gates[instance.gate]
-                    symbol = lib.symbols[gate.symbol].symbol
-                    symbol_id = symbol.get_id()
-                    instance.symbol = symbol.copy()
-                    instance.symbol["id"] = symbol_id
-                    instance.shape = lib.symbols[gate.symbol].shape
-
-                    rot = -1 if instance.mirror else 1
-                    if instance.mirror:
-                        instance.symbol["id"] = "{}F".format(instance.symbol.get_id())
-                        instance.symbol.scale(-1, 1)
-                    if instance.angle:
-                        instance.instance.rotate(rot * instance.angle, instance.center)
-
                     self.symbols.append(instance.symbol)
                     self.symbols.append(instance.shape)
                     id = instance.symbol.get_id()
                     print(id)
-                    instance.instance.href = "#{}".format(id)
 
                 sheet = sheet.sheet
                 sheet["id"] = "sheet{}".format(index)
