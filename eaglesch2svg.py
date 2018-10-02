@@ -29,7 +29,7 @@ def main():
     # print([instance["@part"] for instance in instances])
     sch = Schematic(sch)
     dwg = svgwrite.Drawing(filename=output, debug=True)
-    dwg.viewbox(-350, -350, 700, 700)
+    dwg.viewbox(0, -1000, 1000, 1500)
     [dwg.defs.add(symbol) for symbol in sch.symbols]
 
     dwg.add(sch.schematic)
